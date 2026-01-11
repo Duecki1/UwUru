@@ -1,0 +1,7 @@
+requests
+Pillow
+torch
+transformers
+accelerate
+tqdm
+onnxruntime
