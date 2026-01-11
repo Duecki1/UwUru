@@ -71,17 +71,22 @@ impl Content {
     }
 
     /// Saves content to temporary uploads directory and returns the name of the file written.
-    pub async fn save(self, config: &Config) -> ApiResult<String> {
+    pub async fn save(self, config: &Config, allow_downloader: bool) -> ApiResult<String> {
         match self {
             Self::DirectUpload(file_contents) => file_contents.save(config).map_err(ApiError::from),
             Self::Token(token) => Ok(token),
-            Self::Url(url) => download::from_url(config, url).await,
+            Self::Url(url) => download::from_url(config, url, allow_downloader).await,
         }
     }
 
     /// Computes thumbnail for uploaded content.
-    pub async fn thumbnail(self, config: &Config, thumbnail_type: ThumbnailType) -> ApiResult<DynamicImage> {
-        let token = self.save(config).await?;
+    pub async fn thumbnail(
+        self,
+        config: &Config,
+        thumbnail_type: ThumbnailType,
+        allow_downloader: bool,
+    ) -> ApiResult<DynamicImage> {
+        let token = self.save(config, allow_downloader).await?;
         let file_contents = FileContents::from_token(config, &token)?;
         let temp_path = config.path(Directory::TemporaryUploads).join(&token);
         decode::representative_image(config, &file_contents, &temp_path)
@@ -89,14 +94,14 @@ impl Content {
     }
 
     /// Computes properties for uploaded content.
-    pub async fn compute_properties(self, state: &AppState) -> ApiResult<CachedProperties> {
-        let token = self.save(&state.config).await?;
+    pub async fn compute_properties(self, state: &AppState, allow_downloader: bool) -> ApiResult<CachedProperties> {
+        let token = self.save(&state.config, allow_downloader).await?;
         cache::compute_properties(state, token)
     }
 
     /// Retrieves content properties from cache or computes them if not present in cache.
-    pub async fn get_or_compute_properties(self, state: &AppState) -> ApiResult<CachedProperties> {
-        let token = self.save(&state.config).await?;
+    pub async fn get_or_compute_properties(self, state: &AppState, allow_downloader: bool) -> ApiResult<CachedProperties> {
+        let token = self.save(&state.config, allow_downloader).await?;
         cache::get_or_compute_properties(state, token)
     }
 }

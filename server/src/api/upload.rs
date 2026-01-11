@@ -31,8 +31,8 @@ struct UploadResponse {
 }
 
 /// See [uploading-temporary-file](https://github.com/liamw1/oxibooru/blob/master/docs/API.md#uploading-temporary-file)
-async fn upload_from_url(config: &Config, body: UploadBody) -> ApiResult<Json<UploadResponse>> {
-    let token = download::from_url(config, body.content_url).await?;
+async fn upload_from_url(config: &Config, body: UploadBody, allow_downloader: bool) -> ApiResult<Json<UploadResponse>> {
+    let token = download::from_url(config, body.content_url, allow_downloader).await?;
     Ok(Json(UploadResponse { token }))
 }
 
@@ -43,9 +43,10 @@ async fn upload_handler(
     body: JsonOrMultipart<UploadBody>,
 ) -> ApiResult<Json<UploadResponse>> {
     api::verify_privilege(client, state.config.privileges().upload_create)?;
+    let allow_downloader = client.rank >= state.config.privileges().upload_use_downloader;
 
     match body {
-        JsonOrMultipart::Json(payload) => upload_from_url(&state.config, payload).await,
+        JsonOrMultipart::Json(payload) => upload_from_url(&state.config, payload, allow_downloader).await,
         JsonOrMultipart::Multipart(payload) => {
             let decoded_body = upload::extract(payload, [PartName::Content]).await?;
             if let [Some(upload)] = decoded_body.files {
@@ -53,7 +54,7 @@ async fn upload_handler(
                 Ok(Json(UploadResponse { token }))
             } else if let Some(metadata) = decoded_body.metadata {
                 let url_upload: UploadBody = serde_json::from_slice(&metadata)?;
-                upload_from_url(&state.config, url_upload).await
+                upload_from_url(&state.config, url_upload, allow_downloader).await
             } else {
                 Err(ApiError::MissingFormData)
             }

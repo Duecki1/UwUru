@@ -324,9 +324,10 @@ async fn reverse_search(
     api::verify_privilege(client, state.config.privileges().post_reverse_search)?;
 
     let fields = resource::create_table(params.fields()).map_err(Box::from)?;
+    let allow_downloader = client.rank >= state.config.privileges().upload_use_downloader;
     let content = Content::new(body.content, body.content_token, body.content_url)
         .ok_or(ApiError::MissingContent(ResourceType::Post))?;
-    let content_properties = content.compute_properties(&state).await?;
+    let content_properties = content.compute_properties(&state, allow_downloader).await?;
     state
         .get_connection()?
         .transaction(|conn| {
@@ -439,12 +440,13 @@ async fn create(
     api::verify_privilege(client, required_rank)?;
 
     let fields = resource::create_table(params.fields()).map_err(Box::from)?;
+    let allow_downloader = client.rank >= state.config.privileges().upload_use_downloader;
     let content = Content::new(body.content, body.content_token, body.content_url)
         .ok_or(ApiError::MissingContent(ResourceType::Post))?;
-    let content_properties = content.get_or_compute_properties(&state).await?;
+    let content_properties = content.get_or_compute_properties(&state, allow_downloader).await?;
 
     let custom_thumbnail = match Content::new(body.thumbnail, body.thumbnail_token, body.thumbnail_url) {
-        Some(content) => Some(content.thumbnail(&state.config, ThumbnailType::Post).await?),
+        Some(content) => Some(content.thumbnail(&state.config, ThumbnailType::Post, allow_downloader).await?),
         None => None,
     };
     let flags = content_properties.flags | PostFlags::from_slice(&body.flags.unwrap_or_default());
@@ -691,13 +693,14 @@ async fn update(
 ) -> ApiResult<Json<PostInfo>> {
     let fields = resource::create_table(params.fields()).map_err(Box::from)?;
     let post_hash = PostHash::new(&state.config, post_id);
+    let allow_downloader = client.rank >= state.config.privileges().upload_use_downloader;
 
     let new_content = match Content::new(body.content, body.content_token, body.content_url) {
-        Some(content) => Some(content.get_or_compute_properties(&state).await?),
+        Some(content) => Some(content.get_or_compute_properties(&state, allow_downloader).await?),
         None => None,
     };
     let custom_thumbnail = match Content::new(body.thumbnail, body.thumbnail_token, body.thumbnail_url) {
-        Some(content) => Some(content.thumbnail(&state.config, ThumbnailType::Post).await?),
+        Some(content) => Some(content.thumbnail(&state.config, ThumbnailType::Post, allow_downloader).await?),
         None => None,
     };
 

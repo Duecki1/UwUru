@@ -20,6 +20,8 @@ pub enum ApiError {
     AlreadyExists(ResourceProperty),
     #[error("File of type {0} did not match request with content-type '{1}'")]
     ContentTypeMismatch(MimeType, SmallString),
+    #[error("Unsupported content type '{0}'")]
+    UnsupportedContentType(SmallString),
     #[error("Cyclic dependency detected in {0}s")]
     CyclicDependency(ResourceType),
     #[error("Cannot delete default {0}")]
@@ -78,6 +80,8 @@ pub enum ApiError {
     Request(#[from] reqwest::Error),
     #[error("Someone else modified this in the meantime. Please try again.")]
     ResourceModified,
+    #[error("External downloader failed: {0}")]
+    DownloaderFailure(SmallString),
     #[error("Cannot merge {0} with itself")]
     SelfMerge(ResourceType),
     StdIo(#[from] std::io::Error),
@@ -122,12 +126,13 @@ impl ApiError {
             | Self::NoNamesGiven(_)
             | Self::NotAnInteger(_)
             | Self::Request(_)
+            | Self::DownloaderFailure(_)
             | Self::SelfMerge(_) => StatusCode::BAD_REQUEST,
             Self::NotLoggedIn | Self::Password(_) | Self::UnauthorizedPasswordReset => StatusCode::UNAUTHORIZED,
             Self::InsufficientPrivileges => StatusCode::FORBIDDEN,
             Self::Hidden(_) | Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::ResourceModified => StatusCode::CONFLICT,
-            Self::UnsupportedExtension(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Self::UnsupportedContentType(_) | Self::UnsupportedExtension(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::FailedEmailTransport(_)
             | Self::FailedQuery(_)
             | Self::InvalidHeader(_)
@@ -154,6 +159,7 @@ impl ApiError {
         match self {
             Self::AlreadyExists(_) => "Already Exists",
             Self::ContentTypeMismatch(..) => "Content Type Mismatch",
+            Self::UnsupportedContentType(_) => "Unsupported Content Type",
             Self::CyclicDependency(_) => "Cyclic Dependency",
             Self::DeleteDefault(_) => "Delete Default",
             Self::EmptySwf => "Empty SWF",
@@ -193,6 +199,7 @@ impl ApiError {
             Self::QueryRejection(_) => "Query Rejection",
             Self::Request(_) => "Request Error",
             Self::ResourceModified => "Resource Modified",
+            Self::DownloaderFailure(_) => "Downloader Error",
             Self::SelfMerge(_) => "Self Merge",
             Self::StdIo(_) => "IO Error",
             Self::SwfDecoding(_) => "SWF Decoding Error",

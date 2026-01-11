@@ -443,6 +443,7 @@ impl ErrorKind for crate::api::error::ApiError {
         match self {
             Self::AlreadyExists(err) => err.kind(),
             Self::ContentTypeMismatch(..) => "ContentTypeMismatch",
+            Self::UnsupportedContentType(_) => "UnsupportedContentType",
             Self::CyclicDependency(_) => "CyclicDependency",
             Self::DeleteDefault(_) => "DeleteDefault",
             Self::EmptySwf => "EmptySwf",
@@ -482,6 +483,7 @@ impl ErrorKind for crate::api::error::ApiError {
             Self::QueryRejection(err) => err.kind(),
             Self::Request(_) => "RequestError",
             Self::ResourceModified => "ResourceModified",
+            Self::DownloaderFailure(_) => "DownloaderFailure",
             Self::SelfMerge(_) => "SelfMerge",
             Self::StdIo(err) => err.kind().kind(),
             Self::SwfDecoding(err) => err.kind(),

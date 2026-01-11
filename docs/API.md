@@ -167,7 +167,8 @@ accepts a file named `content`, the client should pass
 body. When creating or updating post content using this method, the server can
 also be configured to employ [yt-dlp](https://github.com/yt-dlp/yt-dlp) to
 download content from popular sites such as youtube, gfycat, etc. Access to
-yt-dlp can be configured with the `'uploads:use_downloader'` permission
+yt-dlp can be configured with the `'uploads:use_downloader'` permission.
+The yt-dlp executable must be available on the server PATH.
 
 Finally, in some cases the user might want to reuse one file between the
 requests to save the bandwidth (for example, reverse search + consecutive

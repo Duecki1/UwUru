@@ -148,6 +148,7 @@ async fn create(
     api::verify_matches_regex(&state.config, &body.name, RegexType::Username)?;
     api::verify_matches_regex(&state.config, &body.password, RegexType::Password)?;
     api::verify_valid_email(body.email.as_deref())?;
+    let allow_downloader = client.rank >= state.config.privileges().upload_use_downloader;
 
     let salt = SaltString::generate(&mut OsRng);
     let hash = password::hash_password(&state.config, &body.password, &salt)?;
@@ -161,7 +162,7 @@ async fn create(
     };
 
     let custom_avatar = match Content::new(body.avatar, body.avatar_token, body.avatar_url) {
-        Some(content) => Some(content.thumbnail(&state.config, ThumbnailType::Avatar).await?),
+        Some(content) => Some(content.thumbnail(&state.config, ThumbnailType::Avatar, allow_downloader).await?),
         None if new_user.avatar_style == AvatarStyle::Manual => {
             return Err(ApiError::MissingContent(ResourceType::User));
         }
@@ -251,9 +252,10 @@ async fn update(
     body: UpdateBody,
 ) -> ApiResult<Json<UserInfo>> {
     let fields = resource::create_table(params.fields()).map_err(Box::from)?;
+    let allow_downloader = client.rank >= state.config.privileges().upload_use_downloader;
 
     let custom_avatar = match Content::new(body.avatar, body.avatar_token, body.avatar_url) {
-        Some(content) => Some(content.thumbnail(&state.config, ThumbnailType::Avatar).await?),
+        Some(content) => Some(content.thumbnail(&state.config, ThumbnailType::Avatar, allow_downloader).await?),
         None if body.avatar_style == Some(AvatarStyle::Manual) => {
             return Err(ApiError::MissingContent(ResourceType::User));
         }
