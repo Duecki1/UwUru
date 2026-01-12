@@ -254,6 +254,8 @@ fn extract_downloader_error(output: &std::process::Output) -> String {
 
     let message = pick_downloader_message(&stderr_lines)
         .or_else(|| pick_downloader_message(&stdout_lines))
+        .or_else(|| tail_downloader_message(&stderr_lines))
+        .or_else(|| tail_downloader_message(&stdout_lines))
         .unwrap_or("yt-dlp failed to download content");
 
     message.to_string()
@@ -273,4 +275,12 @@ fn pick_downloader_message<'a>(lines: &'a [&'a str]) -> Option<&'a str> {
                 .copied()
         })
         .or_else(|| lines.last().copied())
+}
+
+fn tail_downloader_message(lines: &[&str]) -> Option<String> {
+    if lines.is_empty() {
+        return None;
+    }
+    let start = lines.len().saturating_sub(5);
+    Some(lines[start..].join(" | "))
 }
