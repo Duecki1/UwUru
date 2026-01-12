@@ -257,11 +257,12 @@ fn extract_downloader_error(output: &std::process::Output) -> String {
 
     let message = pick_downloader_message(&stderr_lines)
         .or_else(|| pick_downloader_message(&stdout_lines))
+        .map(|line| line.to_string())
         .or_else(|| tail_downloader_message(&stderr_lines))
         .or_else(|| tail_downloader_message(&stdout_lines))
-        .unwrap_or("yt-dlp failed to download content");
+        .unwrap_or_else(|| "yt-dlp failed to download content".to_string());
 
-    message.to_string()
+    message
 }
 
 fn pick_downloader_message<'a>(lines: &'a [&'a str]) -> Option<&'a str> {
