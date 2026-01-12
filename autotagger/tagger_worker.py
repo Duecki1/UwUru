@@ -2,31 +2,27 @@ import os
 import time
 import base64
 import csv
-from io import BytesIO
-from urllib.parse import urljoin, quote
-
 import numpy as np
 import requests
 import onnxruntime as rt
+from io import BytesIO
 from PIL import Image
-
+from urllib.parse import urljoin, quote
 
 # -------------------- ENV --------------------
 
 OXI_BASE_URL = os.getenv("OXI_BASE_URL", "http://server:6666").rstrip("/") + "/"
 OXI_USER = os.getenv("OXI_USER")
 OXI_TOKEN = os.getenv("OXI_TOKEN")
-POLL_SECONDS = int(os.getenv("POLL_SECONDS", "15"))
+POLL_SECONDS = int(os.getenv("POLL_SECONDS", "5"))
 
-# If you want “accept 60% sure tags” set defaults to 0.60
-GENERAL_THRESHOLD = float(os.getenv("GENERAL_THRESHOLD", "0.60"))
+# Thresholds
+GENERAL_THRESHOLD = float(os.getenv("GENERAL_THRESHOLD", "0.35"))
 CHAR_THRESHOLD = float(os.getenv("CHAR_THRESHOLD", "0.60"))
 
+# MCut
 USE_MCUT_GENERAL = os.getenv("USE_MCUT_GENERAL", "1") == "1"
 USE_MCUT_CHARACTER = os.getenv("USE_MCUT_CHARACTER", "0") == "1"
-
-FORCE_RETAG = os.getenv("FORCE_RETAG", "0") == "1"
-CLEAR_OLD_TAGS = os.getenv("CLEAR_OLD_TAGS", "0") == "1"
 
 MODEL_DIR = "/app/model"
 ONNX_URL = "https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3/resolve/main/model.onnx"
@@ -36,17 +32,6 @@ TAGS_PATH = os.path.join(MODEL_DIR, "selected_tags.csv")
 
 MARKER_TAG = os.getenv("MARKER_TAG", "auto_tagged_wd3")
 
-# Categories must already exist in Oxibooru
-CAT_RATING = "rating"
-CAT_CHARACTER = "character"
-CAT_GENERAL = "general"
-
-# Request tuning
-HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "30"))
-IMG_TIMEOUT = float(os.getenv("IMG_TIMEOUT", "90"))
-USER_AGENT = os.getenv("USER_AGENT", "oxibooru-autotagger/1.0")
-
-
 # -------------------- AUTH --------------------
 
 def token_headers(json=True):
@@ -55,72 +40,47 @@ def token_headers(json=True):
     h = {
         "Authorization": f"Token {b64}",
         "Accept": "application/json",
-        "User-Agent": USER_AGENT,
     }
     if json:
         h["Content-Type"] = "application/json"
     return h
 
+# -------------------- LOGIC --------------------
 
-# -------------------- SAFE HTTP JSON --------------------
-
-def request_json(method, url, *, headers=None, params=None, json=None, timeout=HTTP_TIMEOUT):
-    """
-    Like requests.request(...).json() but with:
-    - status/body debug if response isn't JSON
-    - raises with useful info
-    """
-    r = requests.request(method, url, headers=headers, params=params, json=json, timeout=timeout)
-
-    # Fast path: ok + json content type
-    ct = (r.headers.get("Content-Type") or "").lower()
-    if "application/json" in ct:
-        try:
-            return r.json()
-        except Exception:
-            pass
-
-    # Non-JSON or bad JSON -> print debug
-    body_preview = (r.text or "")[:300].replace("\n", "\\n")
-    raise RuntimeError(f"Non-JSON response from {url} -> {r.status_code} CT={ct!r} BODY={body_preview!r}")
-
-
-# -------------------- DEMO LOGIC --------------------
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
 
 def mcut_threshold(probs):
     sorted_probs = probs[probs.argsort()[::-1]]
     difs = sorted_probs[:-1] - sorted_probs[1:]
     t = difs.argmax()
-    return (sorted_probs[t] + sorted_probs[t + 1]) / 2
-
+    thresh = (sorted_probs[t] + sorted_probs[t + 1]) / 2
+    return thresh
 
 def prepare_image(image: Image.Image, target_size: int):
-    # 1) RGBA -> composite on white
     if image.mode != "RGBA":
         image = image.convert("RGBA")
+
     canvas = Image.new("RGBA", image.size, (255, 255, 255))
     canvas.alpha_composite(image)
     image = canvas.convert("RGB")
 
-    # 2) pad to square
     w, h = image.size
     max_dim = max(w, h)
     pad_left = (max_dim - w) // 2
     pad_top = (max_dim - h) // 2
-    padded = Image.new("RGB", (max_dim, max_dim), (255, 255, 255))
-    padded.paste(image, (pad_left, pad_top))
 
-    # 3) resize
+    padded_image = Image.new("RGB", (max_dim, max_dim), (255, 255, 255))
+    padded_image.paste(image, (pad_left, pad_top))
+
     if max_dim != target_size:
-        padded = padded.resize((target_size, target_size), Image.BICUBIC)
+        padded_image = padded_image.resize((target_size, target_size), Image.BICUBIC)
 
-    # 4) RGB -> BGR float32, NHWC
-    arr = np.asarray(padded, dtype=np.float32)
-    arr = arr[:, :, ::-1]
-    return np.expand_dims(arr, axis=0)
+    image_array = np.asarray(padded_image, dtype=np.float32)
+    image_array = image_array[:, :, ::-1]  # RGB -> BGR
+    return np.expand_dims(image_array, axis=0)
 
-
-# -------------------- MODEL --------------------
+# -------------------- MODEL LOADING --------------------
 
 def ensure_model_files():
     os.makedirs(MODEL_DIR, exist_ok=True)
@@ -139,22 +99,15 @@ def ensure_model_files():
         with open(TAGS_PATH, "wb") as f:
             f.write(r.content)
 
-
 def load_labels_no_pandas():
-    tag_names = []
-    rating_indexes = []
-    general_indexes = []
-    character_indexes = []
-
+    tag_names, rating_indexes, general_indexes, character_indexes = [], [], [], []
     with open(TAGS_PATH, "r", encoding="utf-8") as f:
         reader = csv.reader(f)
-        next(reader)  # header
-
-        # v3: tag_id, name, category, count
+        next(reader)
         for idx, row in enumerate(reader):
             if len(row) < 3:
                 continue
-            name = row[1].strip()
+            name = row[1]
             category = int(row[2])
             tag_names.append(name)
 
@@ -167,106 +120,101 @@ def load_labels_no_pandas():
 
     return tag_names, rating_indexes, general_indexes, character_indexes
 
+# -------------------- TAG CATEGORY FIX (OUTLINES) --------------------
+
+def get_tag(tagname: str):
+    r = requests.get(f"{OXI_BASE_URL}tag/{quote(tagname)}", headers=token_headers(), timeout=30)
+    if r.status_code == 404:
+        return None
+    r.raise_for_status()
+    return r.json()
+
+def set_tag_category(tagname: str, tag_version: str, category: str):
+    r = requests.put(
+        f"{OXI_BASE_URL}tag/{quote(tagname)}",
+        headers=token_headers(),
+        json={"version": tag_version, "category": category},
+        timeout=30
+    )
+    r.raise_for_status()
+
+def ensure_tag_category(tagname: str, category: str):
+    tag = get_tag(tagname)
+    if not tag:
+        return
+    if tag.get("category") == category:
+        return
+    set_tag_category(tagname, tag["version"], category)
+
+# -------------------- INFERENCE --------------------
 
 def process_post_image(session, img: Image.Image, tag_data):
     tag_names, rating_idxs, general_idxs, char_idxs = tag_data
 
-    # Input shape is typically [1, H, W, 3] in this model
-    shape = session.get_inputs()[0].shape
-    target_size = int(shape[1])
+    input_shape = session.get_inputs()[0].shape
+    target_size = input_shape[1] if isinstance(input_shape[1], int) else 448
 
     image_input = prepare_image(img, target_size)
-
     input_name = session.get_inputs()[0].name
-    output_name = session.get_outputs()[0].name
+    label_name = session.get_outputs()[0].name
 
-    # WD v3 ONNX already outputs sigmoid probabilities
-    preds = session.run([output_name], {input_name: image_input})[0][0].astype(float)
+    raw_preds = session.run([label_name], {input_name: image_input})[0][0]
 
-    # Ratings
-    ratings = [(tag_names[i], preds[i]) for i in rating_idxs]
-    best_rating, best_rating_p = max(ratings, key=lambda x: x[1])
+    if np.min(raw_preds) < 0 or np.max(raw_preds) > 1.0:
+        preds = sigmoid(raw_preds)
+    else:
+        preds = raw_preds.astype(float)
 
-    # General
-    general = [(tag_names[i], preds[i]) for i in general_idxs]
-    gen_thresh = GENERAL_THRESHOLD
+    ratings_names = [(tag_names[i], preds[i]) for i in rating_idxs]
+    best_rating = max(ratings_names, key=lambda x: x[1])[0] if ratings_names else None
+
+    general_res = [(tag_names[i], preds[i]) for i in general_idxs]
     if USE_MCUT_GENERAL:
-        gen_probs = np.array([p for _, p in general], dtype=float)
+        gen_probs = np.array([x[1] for x in general_res])
         gen_thresh = mcut_threshold(gen_probs)
-    final_general = [(t, p) for (t, p) in general if p > gen_thresh]
-    final_general.sort(key=lambda x: x[1], reverse=True)
+        gen_thresh = max(GENERAL_THRESHOLD, gen_thresh)
+    else:
+        gen_thresh = GENERAL_THRESHOLD
+    final_general = [x[0] for x in general_res if x[1] > gen_thresh]
 
-    # Character
-    chars = [(tag_names[i], preds[i]) for i in char_idxs]
-    char_thresh = CHAR_THRESHOLD
+    char_res = [(tag_names[i], preds[i]) for i in char_idxs]
     if USE_MCUT_CHARACTER:
-        char_probs = np.array([p for _, p in chars], dtype=float)
+        char_probs = np.array([x[1] for x in char_res])
         char_thresh = mcut_threshold(char_probs)
         char_thresh = max(0.15, char_thresh)
-    final_chars = [(t, p) for (t, p) in chars if p > char_thresh]
-    final_chars.sort(key=lambda x: x[1], reverse=True)
+    else:
+        char_thresh = CHAR_THRESHOLD
+    final_chars = [x[0] for x in char_res if x[1] > char_thresh]
 
-    return (best_rating, best_rating_p), final_chars, final_general
+    # characters first, then general, then rating, then marker
+    result_tags = []
+    result_tags.extend(final_chars)
+    result_tags.extend(final_general)
+    if best_rating:
+        result_tags.append(best_rating)
+    result_tags.append(MARKER_TAG)
 
+    return result_tags, final_chars, final_general, best_rating
 
-# -------------------- OXIBOORU API --------------------
+# -------------------- API --------------------
 
 def list_posts(limit=25, offset=0):
     query = quote("sort:id,desc")
-    url = f"{OXI_BASE_URL}posts/"
-    params = {"offset": offset, "limit": limit, "query": query}
-    return request_json("GET", url, headers=token_headers(json=False), params=params, timeout=HTTP_TIMEOUT)
-
+    url = f"{OXI_BASE_URL}posts/?offset={offset}&limit={limit}&query={query}"
+    r = requests.get(url, headers=token_headers(), timeout=30)
+    r.raise_for_status()
+    return r.json()
 
 def get_post(post_id):
-    url = f"{OXI_BASE_URL}post/{post_id}"
-    return request_json("GET", url, headers=token_headers(json=False), timeout=HTTP_TIMEOUT)
-
+    r = requests.get(f"{OXI_BASE_URL}post/{post_id}", headers=token_headers(), timeout=30)
+    r.raise_for_status()
+    return r.json()
 
 def update_post(post_id, version, tags):
-    url = f"{OXI_BASE_URL}post/{post_id}"
     payload = {"version": version, "tags": list(tags)}
-    return request_json("PUT", url, headers=token_headers(json=True), json=payload, timeout=HTTP_TIMEOUT)
-
-
-def tag_get(name):
-    url = f"{OXI_BASE_URL}tag/{quote(name)}"
-    r = requests.get(url, headers=token_headers(json=False), timeout=HTTP_TIMEOUT)
-    if r.status_code == 200:
-        try:
-            return True, r.json()
-        except Exception:
-            return True, {}
-    return False, None
-
-
-def tag_create(name, category):
-    url = f"{OXI_BASE_URL}tags"
-    payload = {"names": [name], "category": category}
-    r = requests.post(url, headers=token_headers(json=True), json=payload, timeout=HTTP_TIMEOUT)
-    if r.status_code in (200, 201):
-        print(f"Created tag {name} -> {category}", flush=True)
-    elif r.status_code == 409:
-        pass
-    else:
-        print(f"Create tag failed {name}: {r.status_code} {r.text[:200]}", flush=True)
-
-
-def ensure_tag_category(name, category):
-    exists, data = tag_get(name)
-    if not exists:
-        tag_create(name, category)
-        return
-
-    current_cat = (data or {}).get("category")
-    version = (data or {}).get("version")
-    if version and current_cat != category:
-        url = f"{OXI_BASE_URL}tag/{quote(name)}"
-        payload = {"version": version, "category": category}
-        r = requests.put(url, headers=token_headers(json=True), json=payload, timeout=HTTP_TIMEOUT)
-        if r.status_code != 200:
-            print(f"Failed moving tag {name}: {r.status_code} {r.text[:200]}", flush=True)
-
+    r = requests.put(f"{OXI_BASE_URL}post/{post_id}", headers=token_headers(), json=payload, timeout=30)
+    r.raise_for_status()
+    return r.json()
 
 def load_image_for_post(pid: int, content_url: str) -> Image.Image:
     if content_url.startswith("data/"):
@@ -277,130 +225,122 @@ def load_image_for_post(pid: int, content_url: str) -> Image.Image:
         return img
 
     full_url = urljoin(OXI_BASE_URL, content_url)
-    resp = requests.get(full_url, headers=token_headers(json=False), timeout=IMG_TIMEOUT)
-    resp.raise_for_status()
-    img = Image.open(BytesIO(resp.content))
+    img_bytes = requests.get(full_url, headers=token_headers(json=False), timeout=60).content
+    img = Image.open(BytesIO(img_bytes))
     img.load()
     return img
 
+def extract_existing_tag_names(post_obj) -> set:
+    existing = set()
+    for t in post_obj.get("tags", []):
+        if isinstance(t, dict) and t.get("names"):
+            existing.add(t["names"][0])
+        elif isinstance(t, str):
+            existing.add(t)
+    return existing
 
 # -------------------- MAIN --------------------
 
 def main():
     if not OXI_USER or not OXI_TOKEN:
-        print("Error: OXI_USER or OXI_TOKEN not set.", flush=True)
+        print("Error: OXI_USER or OXI_TOKEN not set.")
         return
 
     ensure_model_files()
     tag_data = load_labels_no_pandas()
 
+    tag_names, rating_idxs, general_idxs, char_idxs = tag_data
+
+    rating_set = set(tag_names[i] for i in rating_idxs)
+    general_set = set(tag_names[i] for i in general_idxs)
+    char_set = set(tag_names[i] for i in char_idxs)
+
+    def desired_category(tagname: str):
+        if tagname in char_set:
+            return "character"
+        if tagname in rating_set:
+            return "rating"
+        if tagname in general_set:
+            return "general"
+        return None
+
     print(f"Loading Model: {ONNX_PATH}", flush=True)
     sess = rt.InferenceSession(ONNX_PATH, providers=["CPUExecutionProvider"])
 
-    print(f"Bot started. Polling every {POLL_SECONDS}s... FORCE_RETAG={FORCE_RETAG} CLEAR_OLD_TAGS={CLEAR_OLD_TAGS}", flush=True)
+    current_offset = 0
+    PAGE_SIZE = 50
 
-    seen_ids = set()
-    offset = 0
-    limit = 25
+    print("Bot started. Scanning ALL images in database...", flush=True)
 
     while True:
         try:
-            data = list_posts(limit=limit, offset=0)
+            print(f"-- Fetching page at offset {current_offset} --", flush=True)
+            data = list_posts(limit=PAGE_SIZE, offset=current_offset)
             posts = data.get("results", [])
+
+            if not posts:
+                print("End of database reached. Restarting scan from top in 60s...", flush=True)
+                current_offset = 0
+                time.sleep(60)
+                continue
 
             for post in posts:
                 pid = post.get("id")
-                if not pid:
-                    continue
-
-                if not FORCE_RETAG and pid in seen_ids:
-                    continue
-
                 if post.get("type") != "image":
-                    seen_ids.add(pid)
-                    continue
-
-                existing_tags = set()
-                for t in post.get("tags", []):
-                    if isinstance(t, dict) and t.get("names"):
-                        existing_tags.add(t["names"][0])
-                    elif isinstance(t, str):
-                        existing_tags.add(t)
-
-                if not FORCE_RETAG and MARKER_TAG in existing_tags:
-                    seen_ids.add(pid)
                     continue
 
                 content_url = post.get("contentUrl")
                 if not content_url:
-                    seen_ids.add(pid)
+                    continue
+
+                # ✅ skip already-tagged posts (marker present)
+                existing_tags = extract_existing_tag_names(post)
+                if MARKER_TAG in existing_tags:
                     continue
 
                 try:
                     img = load_image_for_post(pid, content_url)
-                    (rating, rating_p), char_tags_scored, general_tags_scored = process_post_image(sess, img, tag_data)
 
-                    # pick best character (if any) for “always first tag”
-                    char_names = [t for (t, _) in char_tags_scored]
-                    general_names = [t for (t, _) in general_tags_scored]
+                    new_tags, chars, generals, rating = process_post_image(sess, img, tag_data)
 
-                    best_char = char_names[0] if char_names else None
-                    rest_chars = char_names[1:] if len(char_names) > 1 else []
+                    # ✅ merge (don’t overwrite)
+                    # keep existing order, append new ones that are missing
+                    merged = list(existing_tags)
+                    added = []
+                    for t in new_tags:
+                        if t not in existing_tags:
+                            merged.append(t)
+                            added.append(t)
 
-                    # Ensure categories
-                    if rating:
-                        ensure_tag_category(rating, CAT_RATING)
-                    for t in char_names:
-                        ensure_tag_category(t, CAT_CHARACTER)
-                    for t in general_names:
-                        ensure_tag_category(t, CAT_GENERAL)
-
-                    # Order: character first, then rating, then rest
-                    new_tags = []
-                    if best_char:
-                        new_tags.append(best_char)
-                    if rating:
-                        new_tags.append(rating)
-                    new_tags.extend(rest_chars)
-                    new_tags.extend(general_names)
-                    new_tags.append(MARKER_TAG)
-
-                    if CLEAR_OLD_TAGS:
-                        merged = new_tags
-                    else:
-                        merged = list(existing_tags)
-                        for t in new_tags:
-                            if t not in existing_tags:
-                                merged.append(t)
+                    # if nothing new to add, skip update
+                    if not added:
+                        continue
 
                     full_post = get_post(pid)
                     version = full_post.get("version")
-                    if not version:
-                        print(f"[{pid}] missing version, skipping", flush=True)
-                        seen_ids.add(pid)
-                        continue
 
-                    print(
-                        f"[{pid}] update: best_char={best_char} rating={rating} "
-                        f"chars={len(char_names)} general={len(general_names)} "
-                        f"(thr gen={GENERAL_THRESHOLD}, char={CHAR_THRESHOLD}, mcut gen={USE_MCUT_GENERAL}, char={USE_MCUT_CHARACTER})",
-                        flush=True,
-                    )
-
+                    print(f"[{pid}] adding {len(added)} tags (total after={len(merged)})", flush=True)
                     update_post(pid, version, merged)
-                    seen_ids.add(pid)
-                    time.sleep(0.4)
+
+                    # ✅ OUTLINE FIX only for newly added tags (less API spam)
+                    for t in added:
+                        cat = desired_category(t)
+                        if cat:
+                            try:
+                                ensure_tag_category(t, cat)
+                            except Exception as e:
+                                print(f"[{pid}] could not set category for {t}: {e}", flush=True)
+
+                    time.sleep(0.2)
 
                 except Exception as e:
-                    print(f"[{pid}] Failed: {e}", flush=True)
-                    seen_ids.add(pid)
+                    print(f"[{pid}] Error: {e}", flush=True)
+
+            current_offset += PAGE_SIZE
 
         except Exception as e:
-            # THIS is where your “Expecting value…” becomes readable now
-            print(f"Loop error: {e}", flush=True)
-
-        time.sleep(POLL_SECONDS)
-
+            print(f"Main Loop Error: {e}", flush=True)
+            time.sleep(POLL_SECONDS)
 
 if __name__ == "__main__":
     main()

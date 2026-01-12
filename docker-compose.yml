@@ -59,18 +59,21 @@ services:
       - OXI_BASE_URL=http://server:6666
       - OXI_USER=duecki
       - OXI_TOKEN=5f8606d0-5e28-4303-aa1a-bf9b91207f62
-      - POLL_SECONDS=120
-      - TAG_THRESHOLD=0.35
-      - MAX_TAGS=50
-      - MARKER_TAG=auto_tagged
-      - FORCE_RETAG=1
-      - CLEAR_OLD_TAGS=1
+      - POLL_SECONDS=5000
+
+      # thresholds used by your current script
       - GENERAL_THRESHOLD=0.60
       - CHAR_THRESHOLD=0.60
       - USE_MCUT_GENERAL=1
       - USE_MCUT_CHARACTER=0
-      - PYTHONUNBUFFERED=1
-    depends_on:
-      - server
-      - client
+  
+      # behavior flags (only if your script reads them)
+      - FORCE_RETAG=0
+      - CLEAR_OLD_TAGS=0
+
+      # marker
+      - MARKER_TAG=auto_tagged
+    volumes:
+      - ${MOUNT_DATA}:/data
+      - ./autotagger/model:/app/model
 
