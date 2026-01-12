@@ -17,3 +17,6 @@ target/
 *.pdb
 
 autotagger/model
+
+# ignore large ML models
+/autotagger/model/
