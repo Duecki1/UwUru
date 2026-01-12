@@ -39,10 +39,12 @@ class PostDetailController extends BasePostController {
             post: post,
             section: section,
             canMerge: api.hasPrivilege("post_merge"),
+            canDelete: api.hasPrivilege("post_delete"),
         });
 
         this._view.addEventListener("select", (e) => this._evtSelect(e));
         this._view.addEventListener("merge", (e) => this._evtMerge(e));
+        this._view.addEventListener("delete", (e) => this._evtDelete(e));
     }
 
     _evtSelect(e) {
@@ -95,6 +97,32 @@ class PostDetailController extends BasePostController {
                     this._view.enableForm();
                 }
             );
+    }
+
+    _evtDelete(e) {
+        if (!this._view) {
+            return;
+        }
+        if (this._view.disableForm) {
+            this._view.disableForm();
+        }
+        e.detail.post.delete().then(
+            () => {
+                misc.disableExitConfirmation();
+                const ctx = router.show(uri.formatClientLink("posts"));
+                ctx.controller.showSuccess("Post deleted.");
+            },
+            (error) => {
+                if (this._view.showError) {
+                    this._view.showError(error.message);
+                } else {
+                    window.alert(error.message);
+                }
+                if (this._view.enableForm) {
+                    this._view.enableForm();
+                }
+            }
+        );
     }
 }
 

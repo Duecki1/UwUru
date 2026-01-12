@@ -23,6 +23,11 @@ class PostDetailView extends events.EventTarget {
         const ctx = this._ctx;
         views.replaceContent(this._hostNode, template(ctx));
 
+        const deleteNode = this._hostNode.querySelector(".delete-post");
+        if (deleteNode) {
+            deleteNode.addEventListener("click", (e) => this._evtDeleteClick(e));
+        }
+
         for (let item of this._hostNode.querySelectorAll("[data-name]")) {
             item.classList.toggle(
                 "active",
@@ -81,6 +86,19 @@ class PostDetailView extends events.EventTarget {
     _evtChange(e) {
         this._ctx.post = e.detail.post;
         this._install(this._ctx);
+    }
+
+    _evtDeleteClick(e) {
+        e.preventDefault();
+        if (confirm("Are you sure you want to delete this post?")) {
+            this.dispatchEvent(
+                new CustomEvent("delete", {
+                    detail: {
+                        post: this._ctx.post,
+                    },
+                })
+            );
+        }
     }
 }
 
