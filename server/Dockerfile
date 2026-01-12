@@ -40,7 +40,7 @@ ARG PUID=1000
 ARG PGID=1000
 
 # Install dynamic libs needed at runtime
-RUN apk update && apk add --no-cache libpq ffmpeg-libavdevice
+RUN apk update && apk add --no-cache libpq ffmpeg-libavdevice yt-dlp
 
 # Set permissions
 RUN mkdir -p /opt/app /data \

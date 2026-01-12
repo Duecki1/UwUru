@@ -241,24 +241,36 @@ fn cleanup_unused_files(files: &[PathBuf], keep: &Path) {
 fn extract_downloader_error(output: &std::process::Output) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let message = stderr
+    let stderr_lines: Vec<&str> = stderr
         .lines()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("")
-        .trim();
-    let message = if message.is_empty() {
-        stdout
-            .lines()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or("")
-            .trim()
-    } else {
-        message
-    };
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    let stdout_lines: Vec<&str> = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
 
-    if message.is_empty() {
-        "yt-dlp failed to download content".to_string()
-    } else {
-        message.to_string()
-    }
+    let message = pick_downloader_message(&stderr_lines)
+        .or_else(|| pick_downloader_message(&stdout_lines))
+        .unwrap_or("yt-dlp failed to download content");
+
+    message.to_string()
+}
+
+fn pick_downloader_message(lines: &[&str]) -> Option<&str> {
+    lines
+        .iter()
+        .rev()
+        .find(|line| line.contains("ERROR:"))
+        .copied()
+        .or_else(|| {
+            lines
+                .iter()
+                .rev()
+                .find(|line| line.contains("WARNING:"))
+                .copied()
+        })
+        .or_else(|| lines.last().copied())
 }
