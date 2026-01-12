@@ -34,6 +34,11 @@
 
         <div class='messages'></div>
 
+        <div class='debug-log'>
+            <h3>Upload debug log</h3>
+            <ul></ul>
+        </div>
+
         <ul class='uploadables-container'></ul>
     </form>
 </div>

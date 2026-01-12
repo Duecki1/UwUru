@@ -177,4 +177,4 @@ comment_score              = "regular"
 snapshot_list              = "power"
 
 upload_create              = "regular"
-upload_use_downloader      = "power"
+upload_use_downloader      = "regular"

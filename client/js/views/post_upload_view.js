@@ -203,6 +203,22 @@ class PostUploadView extends events.EventTarget {
         views.clearMessages(this._hostNode);
     }
 
+    clearDebugLog() {
+        if (this._debugLogListNode) {
+            this._debugLogListNode.innerHTML = "";
+        }
+    }
+
+    logDebug(message) {
+        if (!this._debugLogListNode) {
+            return;
+        }
+        const entry = document.createElement("li");
+        const timestamp = new Date().toLocaleTimeString();
+        entry.textContent = `[${timestamp}] ${message}`;
+        this._debugLogListNode.appendChild(entry);
+    }
+
     showSuccess(message) {
         views.showSuccess(this._hostNode, message);
     }
@@ -451,6 +467,10 @@ class PostUploadView extends events.EventTarget {
 
     get _contentInputNode() {
         return this._formNode.querySelector(".dropper-container");
+    }
+
+    get _debugLogListNode() {
+        return this._hostNode.querySelector(".debug-log ul");
     }
 }
 

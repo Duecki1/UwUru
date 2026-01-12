@@ -55,6 +55,8 @@ class PostUploadController {
     _evtSubmit(e) {
         this._view.disableForm();
         this._view.clearMessages();
+        this._view.clearDebugLog();
+        this._view.logDebug("Upload started.");
         let anyFailures = false;
 
         e.detail.uploadables
@@ -67,6 +69,9 @@ class PostUploadController {
                             e.detail.alwaysUploadSimilar
                         ).catch((error) => {
                             anyFailures = true;
+                            this._view.logDebug(
+                                `Upload failed for ${this._formatUploadableLabel(uploadable)}: ${this._formatError(error)}`
+                            );
                             if (error.uploadable) {
                                 if (error.similarPosts) {
                                     error.uploadable.lookalikes =
@@ -108,9 +113,11 @@ class PostUploadController {
                     misc.disableExitConfirmation();
                     const ctx = router.show(uri.formatClientLink("posts"));
                     ctx.controller.showSuccess("Posts uploaded.");
+                    this._view.logDebug("Upload finished successfully.");
                 },
                 (error) => {
                     this._view.showError(genericErrorMessage);
+                    this._view.logDebug("Upload finished with errors.");
                     this._view.enableForm();
                 }
             );
@@ -118,8 +125,14 @@ class PostUploadController {
 
     _uploadSinglePost(uploadable, skipDuplicates, alwaysUploadSimilar) {
         progress.start();
+        this._view.logDebug(
+            `Processing ${this._formatUploadableLabel(uploadable)}.`
+        );
         let reverseSearchPromise = Promise.resolve();
         if (!uploadable.lookalikesConfirmed) {
+            this._view.logDebug(
+                `Running reverse search for ${this._formatUploadableLabel(uploadable)}.`
+            );
             reverseSearchPromise = Post.reverseSearch(
                 uploadable.url || uploadable.file
             );
@@ -131,6 +144,9 @@ class PostUploadController {
                 if (searchResult) {
                     // notify about exact duplicate
                     if (searchResult.exactPost) {
+                        this._view.logDebug(
+                            `Exact duplicate found for ${this._formatUploadableLabel(uploadable)} (@${searchResult.exactPost.id}).`
+                        );
                         if (skipDuplicates) {
                             this._view.removeUploadable(uploadable);
                             return Promise.resolve();
@@ -149,6 +165,9 @@ class PostUploadController {
                         searchResult.similarPosts.length &&
                         !alwaysUploadSimilar
                     ) {
+                        this._view.logDebug(
+                            `Similar posts found for ${this._formatUploadableLabel(uploadable)} (${searchResult.similarPosts.length}).`
+                        );
                         let error = new Error(
                             `Found ${searchResult.similarPosts.length} similar ` +
                             "posts.\nYou can resume or discard this upload."
@@ -162,6 +181,9 @@ class PostUploadController {
                 // no duplicates, proceed with saving
                 let post = this._uploadableToPost(uploadable);
                 let savePromise = post.save(uploadable.anonymous).then(() => {
+                    this._view.logDebug(
+                        `Uploaded ${this._formatUploadableLabel(uploadable)}.`
+                    );
                     this._view.removeUploadable(uploadable);
                     return Promise.resolve();
                 });
@@ -179,6 +201,22 @@ class PostUploadController {
                     return Promise.reject(error);
                 }
             );
+    }
+
+    _formatUploadableLabel(uploadable) {
+        if (uploadable.url) {
+            return `URL ${uploadable.url}`;
+        }
+        return `file ${uploadable.name}`;
+    }
+
+    _formatError(error) {
+        if (error && error.response) {
+            const name = error.response.name || "UnknownError";
+            const description = error.response.description || error.message;
+            return `${name}: ${description}`;
+        }
+        return error && error.message ? error.message : "Unknown error";
     }
 
     _uploadableToPost(uploadable) {
