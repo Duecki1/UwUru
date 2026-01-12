@@ -114,13 +114,12 @@ async fn download_with_downloader(config: &Config, url: Url) -> ApiResult<String
         }
     };
 
-    if !output.status.success() {
+    let files = list_prefixed_files(&temp_dir, &token_prefix)?;
+    if files.is_empty() && !output.status.success() {
         cleanup_prefixed_files(&temp_dir, &token_prefix);
         let message = extract_downloader_error(&output);
         return Err(ApiError::DownloaderFailure(SmallString::new(message)));
     }
-
-    let files = list_prefixed_files(&temp_dir, &token_prefix)?;
     if files.is_empty() {
         return Err(ApiError::DownloaderFailure(SmallString::new(
             "Downloader did not produce any files.",
@@ -133,6 +132,10 @@ async fn download_with_downloader(config: &Config, url: Url) -> ApiResult<String
             return Err(err);
         }
     };
+    if !output.status.success() {
+        let message = extract_downloader_error(&output);
+        eprintln!("yt-dlp exited with error but produced a file: {message}");
+    }
     cleanup_unused_files(&files, &selected);
 
     let extension = selected
