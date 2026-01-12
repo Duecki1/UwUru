@@ -15,8 +15,8 @@ use uuid::Uuid;
 const FAKE_USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:135.0) Gecko/20100101 Firefox/135.0";
 const YTDLP_FORMAT_SELECTOR: &str =
-    "best[ext=jpg]/best[ext=jpeg]/best[ext=png]/best[ext=gif]/best[ext=webp]/best[ext=bmp]/\
-best[ext=avif]/best[ext=mp4]/best[ext=webm]/best[ext=mov]";
+    "bestvideo*+bestaudio/best[ext=mp4]/best[ext=webm]/best[ext=mov]/\
+best[ext=jpg]/best[ext=jpeg]/best[ext=png]/best[ext=gif]/best[ext=webp]/best[ext=bmp]/best[ext=avif]/best";
 
 /// Attempts to download file at the specified `url`.
 /// If successful, the file is saved in the temporary uploads directory
@@ -92,6 +92,8 @@ async fn download_with_downloader(config: &Config, url: Url) -> ApiResult<String
         .arg("--no-progress")
         .arg("--format")
         .arg(YTDLP_FORMAT_SELECTOR)
+        .arg("--merge-output-format")
+        .arg("mp4")
         .arg("--max-filesize")
         .arg(MAX_UPLOAD_SIZE.to_string())
         .arg("-o")
