@@ -69,6 +69,7 @@ class PostUploadController {
                             e.detail.alwaysUploadSimilar
                         ).catch((error) => {
                             anyFailures = true;
+                            this._logUploaderHint(uploadable, error);
                             this._view.logDebug(
                                 `Upload failed for ${this._formatUploadableLabel(uploadable)}: ${this._formatError(error)}`
                             );
@@ -217,6 +218,33 @@ class PostUploadController {
             return `${name}: ${description}`;
         }
         return error && error.message ? error.message : "Unknown error";
+    }
+
+    _logUploaderHint(uploadable, error) {
+        if (!error || !error.response) {
+            return;
+        }
+        if (error.response.name === "UnsupportedContentType") {
+            this._view.logDebug(
+                `Hint: This URL returned HTML. Enable uploads:use_downloader or use a direct media URL for ${this._formatUploadableLabel(uploadable)}.`
+            );
+            this._view.showInfo(
+                "This URL returned HTML. Enable uploads:use_downloader or use a direct media URL.",
+                uploadable
+            );
+        }
+        if (error.response.name === "DownloaderFailure") {
+            const description = error.response.description || "";
+            if (description.toLowerCase().includes("yt-dlp executable not found")) {
+                this._view.logDebug(
+                    `Hint: yt-dlp is not installed on the server PATH for ${this._formatUploadableLabel(uploadable)}.`
+                );
+                this._view.showInfo(
+                    "yt-dlp is not installed on the server PATH.",
+                    uploadable
+                );
+            }
+        }
     }
 
     _uploadableToPost(uploadable) {
