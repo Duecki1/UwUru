@@ -259,7 +259,7 @@ fn extract_downloader_error(output: &std::process::Output) -> String {
     message.to_string()
 }
 
-fn pick_downloader_message(lines: &[&str]) -> Option<&str> {
+fn pick_downloader_message<'a>(lines: &'a [&'a str]) -> Option<&'a str> {
     lines
         .iter()
         .rev()
